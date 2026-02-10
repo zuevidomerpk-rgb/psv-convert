@@ -104,6 +104,17 @@
       from { opacity: 0; transform: translateY(8px); }
       to { opacity: 1; transform: translateY(0); }
     }
+
+    .mini-btn {
+      font-weight: 900;
+      font-size: 11px;
+      padding: 7px 10px;
+      border-radius: 12px;
+      transition: 0.15s ease;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .mini-btn:active { transform: scale(0.96); }
   </style>
 </head>
 
@@ -128,6 +139,7 @@
       </div>
 
       <div id="drop-zone" class="p-4 text-center cursor-pointer select-none">
+        <!-- IMPORTANT: no accept filter (Telegram WebApp часто ломает .psv) -->
         <input id="file-input" type="file" class="hidden" multiple>
 
         <div class="flex items-center justify-center gap-3">
@@ -233,7 +245,8 @@
       files: [],
       format: "kml",
       intervalMode: "none",
-      intervalValue: null
+      intervalValue: null,
+      results: []
     };
 
     // ==========================
@@ -319,39 +332,94 @@
       }
     }
 
-    function showStatus(text, type="ok") {
-      statusMsg.classList.remove("hidden");
-      statusMsg.innerHTML = "";
-
-      const div = document.createElement("div");
-      div.className = "toast " + (type === "ok"
-        ? "bg-blue-600 text-white shadow-blue-200"
-        : "bg-red-600 text-white shadow-red-200");
-
-      div.textContent = text;
-      statusMsg.appendChild(div);
-    }
-
     function clearStatus() {
       statusMsg.classList.add("hidden");
       statusMsg.innerHTML = "";
     }
 
-    function downloadFile(content, filename) {
+    function showError(text) {
+      statusMsg.classList.remove("hidden");
+      statusMsg.innerHTML = `
+        <div class="toast bg-red-600 text-white shadow-red-200">${text}</div>
+      `;
+    }
+
+    function cleanupResults() {
+      state.results.forEach(r => {
+        try { URL.revokeObjectURL(r.url); } catch(e) {}
+      });
+      state.results = [];
+    }
+
+    function createResultFile(content, filename) {
       const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
       const url = URL.createObjectURL(blob);
 
+      state.results.push({
+        name: filename,
+        blob,
+        url
+      });
+    }
+
+    function forceDownload(url, filename) {
       const a = document.createElement("a");
       a.href = url;
       a.download = filename;
       document.body.appendChild(a);
       a.click();
-
-      setTimeout(() => {
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }, 0);
+      document.body.removeChild(a);
     }
+
+    function renderResults() {
+      if (!state.results.length) return;
+
+      statusMsg.classList.remove("hidden");
+
+      const items = state.results.map((r, idx) => `
+        <div class="flex items-center justify-between gap-2 bg-white/10 rounded-xl px-3 py-2">
+          <div class="truncate text-xs font-black">${r.name}</div>
+          <div class="flex gap-2 shrink-0">
+            <button class="mini-btn bg-blue-500 text-white hover:bg-blue-400"
+              onclick="window.open('${r.url}', '_blank')">
+              Открыть
+            </button>
+            <button class="mini-btn bg-white/20 text-white hover:bg-white/30"
+              onclick="forceDownload('${r.url}', '${r.name.replace(/'/g,"") }')">
+              Скачать
+            </button>
+          </div>
+        </div>
+      `).join("");
+
+      statusMsg.innerHTML = `
+        <div class="toast bg-slate-900 text-white">
+          <div class="flex items-center justify-between mb-2">
+            <div class="font-black">Готово: ${state.results.length}</div>
+            <button class="mini-btn bg-white/15 hover:bg-white/25 text-white"
+              onclick="downloadAll()">
+              Скачать всё
+            </button>
+          </div>
+
+          <div class="space-y-2 max-h-52 overflow-auto pr-1">
+            ${items}
+          </div>
+
+          <div class="mt-2 text-[10px] font-black uppercase tracking-widest text-white/60">
+            Если не открывается — нажми "Скачать" и ищи в загрузках
+          </div>
+        </div>
+      `;
+    }
+
+    function downloadAll() {
+      state.results.forEach(r => forceDownload(r.url, r.name));
+    }
+
+    // expose functions to buttons
+    window.forceDownload = forceDownload;
+    window.downloadAll = downloadAll;
 
     // ==========================
     // PARSER
@@ -540,14 +608,12 @@
         clearFilesBtn.classList.add("hidden");
       }
 
-      // hide KML settings if GPX
       if (state.format === "gpx") {
         kmlSettings.classList.add("hidden");
       } else {
         kmlSettings.classList.remove("hidden");
       }
 
-      // enable convert button
       const readyKML = state.format === "kml" && (state.intervalMode === "none" || state.intervalValue !== null);
       const readyGPX = state.format === "gpx";
 
@@ -618,7 +684,6 @@
       const arr = Array.from(files || []);
       if (!arr.length) return;
 
-      // add all
       state.files.push(...arr);
 
       renderFileList();
@@ -713,14 +778,15 @@
     async function runConversion() {
       try {
         clearStatus();
+        cleanupResults();
 
         if (!state.files.length) {
-          showStatus("Файлы не выбраны", "err");
+          showError("Файлы не выбраны");
           return;
         }
 
         if (state.format === "kml" && state.intervalMode !== "none" && state.intervalValue === null) {
-          showStatus("Выберите интервал", "err");
+          showError("Выберите интервал");
           return;
         }
 
@@ -741,7 +807,7 @@
 
             if (state.format === "gpx") {
               const gpx = convertToGPX(points, baseName);
-              downloadFile(gpx, `${baseName}.gpx`);
+              createResultFile(gpx, `${baseName}.gpx`);
               okCount++;
               continue;
             }
@@ -759,24 +825,24 @@
             }
 
             const kml = createKML(points, baseName, timeInterval, distanceInterval);
-            downloadFile(kml, `${baseName}${suffix}.kml`);
+            createResultFile(kml, `${baseName}${suffix}.kml`);
             okCount++;
+
           } catch (e) {
             errCount++;
           }
         }
 
-        if (okCount && !errCount) {
-          showStatus(`Готово: ${okCount}`, "ok");
-        } else if (okCount && errCount) {
-          showStatus(`Готово: ${okCount}, ошибок: ${errCount}`, "ok");
-        } else {
-          showStatus("Ошибка: файлы не распознаны", "err");
+        if (!okCount) {
+          showError("Ошибка: файлы не распознаны");
+          return;
         }
+
+        renderResults();
 
       } catch (e) {
         console.error(e);
-        showStatus("Ошибка конвертации", "err");
+        showError("Ошибка конвертации");
       }
     }
 
