@@ -129,7 +129,7 @@
       <h1 class="text-3xl font-black italic text-slate-900 tracking-tight flex items-center justify-center gap-2">
         PSV <span class="text-blue-600">Convert</span>
         <span class="text-[10px] font-black not-italic px-2 py-1 rounded-xl bg-slate-200 text-slate-600 tracking-widest">
-    v1.3
+          v1.5
         </span>
       </h1>
     </header>
@@ -142,7 +142,6 @@
       </div>
 
       <div id="drop-zone" class="p-4 text-center cursor-pointer select-none">
-        <!-- IMPORTANT: no accept filter (Telegram WebApp часто ломает .psv) -->
         <input id="file-input" type="file" class="hidden" multiple>
 
         <div class="flex items-center justify-center gap-3">
@@ -224,9 +223,6 @@
   </main>
 
   <script>
-    // ==========================
-    // STATE
-    // ==========================
     const usedColors = new Set();
 
     const INTERVALS = {
@@ -252,9 +248,6 @@
       results: []
     };
 
-    // ==========================
-    // UI ELEMENTS
-    // ==========================
     const dropZone = document.getElementById("drop-zone");
     const fileInput = document.getElementById("file-input");
     const fileList = document.getElementById("file-list");
@@ -268,9 +261,6 @@
     const convertBtn = document.getElementById("convert-btn");
     const statusMsg = document.getElementById("status-msg");
 
-    // ==========================
-    // HELPERS (python logic)
-    // ==========================
     function calculateDistance(lat1, lon1, lat2, lon2) {
       const R = 6371000;
       const toRad = v => v * Math.PI / 180;
@@ -319,8 +309,6 @@
       }
 
       const toHex = x => Math.floor(x * 255).toString(16).padStart(2, "0");
-
-      // ABGR = ff + blue + green + red
       return `ff${toHex(b)}${toHex(g)}${toHex(r)}`;
     }
 
@@ -355,7 +343,7 @@
     }
 
     function createResultFile(content, filename) {
-      const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+      const blob = new Blob([content], { type: "application/octet-stream" });
       const url = URL.createObjectURL(blob);
 
       state.results.push({
@@ -374,6 +362,26 @@
       document.body.removeChild(a);
     }
 
+    async function shareFile(i) {
+      try {
+        const r = state.results[i];
+        const file = new File([r.blob], r.name, { type: "application/octet-stream" });
+
+        if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            files: [file],
+            title: r.name,
+            text: "Track file"
+          });
+        } else {
+          forceDownload(r.url, r.name);
+          alert("Поделиться не поддерживается. Файл скачан в загрузки.");
+        }
+      } catch (e) {
+        forceDownload(state.results[i].url, state.results[i].name);
+      }
+    }
+
     function renderResults() {
       if (!state.results.length) return;
 
@@ -384,8 +392,8 @@
           <div class="truncate text-xs font-black">${r.name}</div>
           <div class="flex gap-2 shrink-0">
             <button class="mini-btn bg-blue-500 text-white hover:bg-blue-400"
-              onclick="window.open('${r.url}', '_blank')">
-              Открыть
+              onclick="shareFile(${idx})">
+              Поделиться
             </button>
             <button class="mini-btn bg-white/20 text-white hover:bg-white/30"
               onclick="forceDownload('${r.url}', '${r.name.replace(/'/g,"") }')">
@@ -410,7 +418,7 @@
           </div>
 
           <div class="mt-2 text-[10px] font-black uppercase tracking-widest text-white/60">
-            Если не открывается — нажми "Скачать" и ищи в загрузках
+            Лучше всего: "Поделиться" → HERE / Google Earth / OsmAnd
           </div>
         </div>
       `;
@@ -420,13 +428,10 @@
       state.results.forEach(r => forceDownload(r.url, r.name));
     }
 
-    // expose functions to buttons
     window.forceDownload = forceDownload;
     window.downloadAll = downloadAll;
+    window.shareFile = shareFile;
 
-    // ==========================
-    // PARSER
-    // ==========================
     function parsePSV(text) {
       const lines = text.split(/\r?\n/);
       const points = [];
@@ -447,9 +452,6 @@
       return points;
     }
 
-    // ==========================
-    // CONVERTERS
-    // ==========================
     function convertToGPX(points, name) {
       let gpx = `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="PSV to GPX Converter"
@@ -597,9 +599,6 @@
 `;
     }
 
-    // ==========================
-    // UI LOGIC
-    // ==========================
     function updateUI() {
       fileCount.textContent = state.files.length;
 
@@ -688,7 +687,6 @@
       if (!arr.length) return;
 
       state.files.push(...arr);
-
       renderFileList();
       updateUI();
     }
@@ -700,9 +698,6 @@
       updateUI();
     }
 
-    // ==========================
-    // EVENTS
-    // ==========================
     dropZone.addEventListener("click", () => fileInput.click());
 
     fileInput.addEventListener("change", (e) => {
@@ -714,7 +709,6 @@
       clearFiles();
     });
 
-    // drag drop fix
     let dragCounter = 0;
 
     dropZone.addEventListener("dragenter", (e) => {
@@ -745,7 +739,6 @@
       addFiles(files);
     });
 
-    // format
     document.querySelectorAll('[data-type="format"]').forEach(card => {
       card.addEventListener("click", () => {
         document.querySelectorAll('[data-type="format"]').forEach(c => c.classList.remove("active"));
@@ -756,7 +749,6 @@
       });
     });
 
-    // interval mode
     document.querySelectorAll('[data-type="interval-mode"]').forEach(btn => {
       btn.addEventListener("click", () => {
         document.querySelectorAll('[data-type="interval-mode"]').forEach(b => {
@@ -775,9 +767,6 @@
       });
     });
 
-    // ==========================
-    // RUN CONVERSION (multi-file)
-    // ==========================
     async function runConversion() {
       try {
         clearStatus();
@@ -851,7 +840,6 @@
 
     convertBtn.addEventListener("click", runConversion);
 
-    // init
     renderIntervals();
     updateUI();
   </script>
